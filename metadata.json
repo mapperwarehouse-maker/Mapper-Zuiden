@@ -1,0 +1,5 @@
+{
+  "name": "Warehouse Mapper (WM-Lite)",
+  "description": "An internal warehouse mapping tool to locate products by SKU or EAN, featuring a high-performance search interface and an administrative dashboard.",
+  "requestFramePermissions": []
+}
