@@ -27,7 +27,14 @@ import {
   AlertTriangle,
   Lock,
   User,
-  LogOut
+  LogOut,
+  Eraser,
+  ArrowUpDown,
+  CheckSquare,
+  Square,
+  Eye,
+  EyeOff,
+  Download
 } from 'lucide-react';
 
 import { fetchWarehouseData, fetchLocations, fetchMapeoHistory, appendMapeoRow } from './services/dataService';
@@ -40,11 +47,17 @@ const USERS = [
   { username: 'Despacho', password: 'Zuiden26', role: 'operator', label: 'Operario Despacho' },
 ];
 
+type SortConfig = {
+  key: 'sku' | 'descripcion' | 'ubicacionId' | 'activo' | 'cliente';
+  direction: 'asc' | 'desc';
+} | null;
+
 const App: React.FC = () => {
   // Login State
   const [currentUser, setCurrentUser] = useState<typeof USERS[0] | null>(null);
   const [loginForm, setLoginForm] = useState({ user: '', pass: '' });
   const [loginError, setLoginError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
 
   // App Data State
   const [products, setProducts] = useState<Product[]>([]);
@@ -57,7 +70,7 @@ const App: React.FC = () => {
   const [viewMode, setViewMode] = useState<ViewMode>('assign');
 
   // Confirmation Modal State
-  const [confirmModal, setConfirmModal] = useState<{ show: boolean; prod: Product | null; locId: string } | null>(null);
+  const [confirmModal, setConfirmModal] = useState<{ show: boolean; prod: Product | null; locId: string; isBatch?: boolean; count?: number; batchItems?: {prod: Product, locId: string}[] } | null>(null);
 
   // Search
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -66,6 +79,7 @@ const App: React.FC = () => {
   // Location Consult
   const [searchLocQuery, setSearchLocQuery] = useState<string>('');
   const [showLocHistory, setShowLocHistory] = useState(false);
+  const [selectedForEmpty, setSelectedForEmpty] = useState<Set<string>>(new Set()); // Almacena SKUs seleccionados en Consultar Ubic
 
   // Assign
   const [scanProductCode, setScanProductCode] = useState<string>('');
@@ -74,8 +88,10 @@ const App: React.FC = () => {
   const [assignStatus, setAssignStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [isAssigning, setIsAssigning] = useState(false);
 
-  // Admin Search
+  // Admin Search, Sort & Multi-select
   const [adminSearchQuery, setAdminSearchQuery] = useState<string>('');
+  const [adminSort, setAdminSort] = useState<SortConfig>({ key: 'ubicacionId', direction: 'asc' });
+  const [adminSelectedIndices, setAdminSelectedIndices] = useState<Set<number>>(new Set());
 
   const productInputRef = useRef<HTMLInputElement | null>(null);
   const locationInputRef = useRef<HTMLInputElement | null>(null);
@@ -110,6 +126,15 @@ const App: React.FC = () => {
     return () => document.removeEventListener('fullscreenchange', handleFullScreenChange);
   }, [loadData, currentUser]);
 
+  // Limpiar selección cuando cambia la ubicación consultada o la búsqueda en admin
+  useEffect(() => {
+    setSelectedForEmpty(new Set());
+  }, [searchLocQuery]);
+
+  useEffect(() => {
+    setAdminSelectedIndices(new Set());
+  }, [adminSearchQuery, viewMode]);
+
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
     const user = USERS.find(u => u.username === loginForm.user && u.password === loginForm.pass);
@@ -124,17 +149,9 @@ const App: React.FC = () => {
   const handleLogout = () => {
     setCurrentUser(null);
     setLoginForm({ user: '', pass: '' });
+    setShowPassword(false);
   };
 
-  const toggleFullScreen = () => {
-    if (!document.fullscreenElement) {
-      document.documentElement.requestFullscreen().catch(() => {});
-    } else {
-      if (document.exitFullscreen) document.exitFullscreen();
-    }
-  };
-
-  // Se ignora prioridad y rol, se ordenan alfabéticamente para una vista clara
   const getSortedUbicaciones = (locs: ProductLocation[]) => {
     return [...locs]
       .filter(u => u.activo)
@@ -165,17 +182,51 @@ const App: React.FC = () => {
 
   const adminFilteredList = useMemo(() => {
     const q = adminSearchQuery.trim().toLowerCase();
-    const list = products.flatMap(p => 
+    let list = products.flatMap(p => 
       p.ubicaciones.map(u => ({ product: p, location: u }))
     );
-    if (!q) return list;
-    return list.filter(item => 
-      item.product.sku.toLowerCase().includes(q) ||
-      item.product.ean.toLowerCase().includes(q) ||
-      item.product.descripcion.toLowerCase().includes(q) ||
-      item.location.ubicacionId.toLowerCase().includes(q)
-    );
-  }, [products, adminSearchQuery]);
+    
+    if (q) {
+      list = list.filter(item => 
+        item.product.sku.toLowerCase().includes(q) ||
+        item.product.ean.toLowerCase().includes(q) ||
+        item.product.descripcion.toLowerCase().includes(q) ||
+        item.product.cliente.toLowerCase().includes(q) ||
+        item.location.ubicacionId.toLowerCase().includes(q)
+      );
+    }
+
+    if (adminSort) {
+      list.sort((a, b) => {
+        let valA: string | number = '';
+        let valB: string | number = '';
+        
+        if (adminSort.key === 'sku') { valA = a.product.sku; valB = b.product.sku; }
+        else if (adminSort.key === 'descripcion') { valA = a.product.descripcion; valB = b.product.descripcion; }
+        else if (adminSort.key === 'cliente') { valA = a.product.cliente; valB = b.product.cliente; }
+        else if (adminSort.key === 'ubicacionId') { valA = a.location.ubicacionId; valB = b.location.ubicacionId; }
+        else if (adminSort.key === 'activo') { valA = a.location.activo ? 1 : 0; valB = b.location.activo ? 1 : 0; }
+
+        if (typeof valA === 'string') {
+          const res = valA.localeCompare(valB as string, undefined, { numeric: true, sensitivity: 'base' });
+          return adminSort.direction === 'asc' ? res : -res;
+        } else {
+          const res = (valA as number) - (valB as number);
+          return adminSort.direction === 'asc' ? res : -res;
+        }
+      });
+    }
+
+    return list;
+  }, [products, adminSearchQuery, adminSort]);
+
+  const requestAdminSort = (key: 'sku' | 'descripcion' | 'ubicacionId' | 'activo' | 'cliente') => {
+    let direction: 'asc' | 'desc' = 'asc';
+    if (adminSort && adminSort.key === key && adminSort.direction === 'asc') {
+      direction = 'desc';
+    }
+    setAdminSort({ key, direction });
+  };
 
   const scannedProductInfo = useMemo(() => {
     const code = scanProductCode.trim().toLowerCase();
@@ -206,12 +257,105 @@ const App: React.FC = () => {
   }, [locations, products, history, searchLocQuery]);
 
   const handleToggleActive = async (prod: Product, locId: string, targetActive: boolean) => {
-    if (!targetActive && currentUser?.role !== 'admin') {
+    if (!targetActive) {
       setConfirmModal({ show: true, prod, locId });
       return;
     }
-    
     executeToggleActive(prod, locId, targetActive);
+  };
+
+  const toggleSelectForEmpty = (sku: string) => {
+    const next = new Set(selectedForEmpty);
+    if (next.has(sku)) next.delete(sku);
+    else next.add(sku);
+    setSelectedForEmpty(next);
+  };
+
+  const toggleSelectAllForEmpty = () => {
+    if (!selectedLocData) return;
+    if (selectedForEmpty.size === selectedLocData.productsHere.length) {
+      setSelectedForEmpty(new Set());
+    } else {
+      const next = new Set(selectedLocData.productsHere.map(p => p.sku));
+      setSelectedForEmpty(next);
+    }
+  };
+
+  // --- Selección Admin ---
+  const toggleAdminSelection = (index: number) => {
+    const next = new Set(adminSelectedIndices);
+    if (next.has(index)) next.delete(index);
+    else next.add(index);
+    setAdminSelectedIndices(next);
+  };
+
+  const toggleSelectAllAdmin = () => {
+    if (adminSelectedIndices.size === adminFilteredList.length) {
+      setAdminSelectedIndices(new Set());
+    } else {
+      const next = new Set(adminFilteredList.map((_, i) => i));
+      setAdminSelectedIndices(next);
+    }
+  };
+
+  const handleBulkDisableAdmin = () => {
+    const itemsToDisable = adminFilteredList
+      .filter((item, i) => adminSelectedIndices.has(i) && item.location.activo)
+      .map(item => ({ prod: item.product, locId: item.location.ubicacionId }));
+    
+    if (itemsToDisable.length === 0) return;
+
+    setConfirmModal({
+      show: true,
+      prod: null,
+      locId: 'Panel Admin',
+      isBatch: true,
+      count: itemsToDisable.length,
+      batchItems: itemsToDisable
+    });
+  };
+
+  const handleEmptySelectedRequest = () => {
+    if (!selectedLocData || selectedForEmpty.size === 0) return;
+    const items = selectedLocData.productsHere
+      .filter(p => selectedForEmpty.has(p.sku))
+      .map(p => ({ prod: p, locId: selectedLocData.loc.ubicacionId }));
+
+    setConfirmModal({ 
+      show: true, 
+      prod: null, 
+      locId: selectedLocData.loc.ubicacionId, 
+      isBatch: true,
+      count: selectedForEmpty.size,
+      batchItems: items
+    });
+  };
+
+  const executeBatchDeactivation = async (items: {prod: Product, locId: string}[]) => {
+    setIsAssigning(true);
+    try {
+      for (const item of items) {
+        await appendMapeoRow({
+          Timestamp: new Date().toISOString(),
+          Usuario: currentUser?.username || 'Sistema',
+          EAN: item.prod.ean,
+          SKU: item.prod.sku,
+          Descripcion: item.prod.descripcion,
+          UbicacionID: item.locId,
+          RolUbicacion: item.prod.ubicaciones.find(u => u.ubicacionId === item.locId)?.rolUbicacion || 'Picking',
+          Prioridad: 0,
+          Activo: false,
+          Motivo: 'Acción masiva/selectiva',
+          Observaciones: 'Baja masiva por ' + currentUser?.username
+        });
+      }
+      setSelectedForEmpty(new Set());
+      setAdminSelectedIndices(new Set());
+      await loadData();
+    } finally {
+      setIsAssigning(false);
+      setConfirmModal(null);
+    }
   };
 
   const executeToggleActive = async (prod: Product, locId: string, targetActive: boolean) => {
@@ -228,13 +372,37 @@ const App: React.FC = () => {
         Prioridad: 0,
         Activo: targetActive,
         Motivo: targetActive ? 'Habilitación manual' : 'Desactivación manual',
-        Observaciones: 'Cambio de estado desde panel ' + (currentUser?.role === 'admin' ? 'admin' : 'mapeo')
+        Observaciones: 'Cambio de estado desde panel ' + (viewMode)
       });
       if (ok) await loadData();
     } finally {
       setIsAssigning(false);
       setConfirmModal(null);
     }
+  };
+
+  const handleExportExcel = () => {
+    const headers = ['SKU', 'EAN', 'Descripcion', 'Cliente', 'Ubicacion', 'Rol', 'Estado'];
+    const rows = adminFilteredList.map(item => [
+      item.product.sku,
+      item.product.ean,
+      item.product.descripcion,
+      item.product.cliente,
+      item.location.ubicacionId,
+      item.location.rolUbicacion,
+      item.location.activo ? 'ACTIVA' : 'BAJA'
+    ]);
+
+    const csvContent = [headers, ...rows].map(e => e.join(";")).join("\n");
+    const blob = new Blob(["\uFEFF" + csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    link.setAttribute("href", url);
+    link.setAttribute("download", `mapeo_zuiden_${new Date().toISOString().split('T')[0]}.csv`);
+    link.style.visibility = 'hidden';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   const handleAssignCommit = async () => {
@@ -255,13 +423,13 @@ const App: React.FC = () => {
     }
 
     if (!locExists.tipo) {
-      setAssignStatus({ ok: false, msg: 'Falta cargar Rol en esa ubicación (Sheet UBICACIONES Col F).' });
+      setAssignStatus({ ok: false, msg: 'Falta cargar Rol en esa ubicación.' });
       return;
     }
 
     const alreadyThere = prod.ubicaciones.some(u => u.ubicacionId.toUpperCase() === locId && u.activo);
     if (alreadyThere) {
-      setAssignStatus({ ok: false, msg: 'El producto ya está activo en esta ubicación.' });
+      setAssignStatus({ ok: false, msg: 'Ya está activo en esta ubicación.' });
       return;
     }
 
@@ -329,12 +497,19 @@ const App: React.FC = () => {
               <div className="relative">
                 <Lock className="absolute left-4 top-1/2 -translate-y-1/2 text-zinc-600" size={18} />
                 <input 
-                  type="password" 
+                  type={showPassword ? "text" : "password"} 
                   value={loginForm.pass}
                   onChange={e => setLoginForm({ ...loginForm, pass: e.target.value })}
-                  className="w-full bg-black border border-zinc-800 rounded-2xl py-4 pl-12 pr-6 text-white outline-none focus:ring-2 focus:ring-orange-500/50 transition-all font-bold"
+                  className="w-full bg-black border border-zinc-800 rounded-2xl py-4 pl-12 pr-12 text-white outline-none focus:ring-2 focus:ring-orange-500/50 transition-all font-bold"
                   placeholder="••••••••"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(!showPassword)}
+                  className="absolute right-4 top-1/2 -translate-y-1/2 text-zinc-600 hover:text-orange-500 transition-colors"
+                >
+                  {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
               </div>
             </div>
 
@@ -403,12 +578,17 @@ const App: React.FC = () => {
         {confirmModal && (
           <div className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-black/60 backdrop-blur-sm animate-in fade-in duration-200">
             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-10 border border-slate-200 shadow-2xl flex flex-col items-center text-center animate-in zoom-in-95 duration-200">
-              <div className="bg-rose-50 p-4 rounded-3xl text-rose-500 mb-6">
-                <AlertTriangle size={48} />
+              <div className={`p-4 rounded-3xl mb-6 ${confirmModal.isBatch ? 'bg-orange-50 text-orange-500' : 'bg-rose-50 text-rose-500'}`}>
+                {confirmModal.isBatch ? <Trash2 size={48} /> : <AlertTriangle size={48} />}
               </div>
-              <h3 className="text-xl font-black text-slate-800 uppercase mb-4">Confirmación</h3>
+              <h3 className="text-xl font-black text-slate-800 uppercase mb-4">
+                {confirmModal.isBatch ? 'Acción por Lote' : 'Confirmación'}
+              </h3>
               <p className="text-sm text-slate-500 font-medium leading-relaxed mb-8">
-                ¿Estás seguro de que deseas <span className="text-rose-600 font-black">DESHABILITAR</span> este producto de la ubicación <span className="text-slate-800 font-black">{confirmModal.locId}</span>?
+                {confirmModal.isBatch 
+                  ? `¿Estás seguro de que deseas DESHABILITAR (${confirmModal.count}) registros seleccionados de la ubicación/panel?`
+                  : `¿Estás seguro de que deseas DESHABILITAR este producto de la ubicación ${confirmModal.locId}?`
+                }
               </p>
               <div className="flex gap-3 w-full">
                 <button 
@@ -418,8 +598,14 @@ const App: React.FC = () => {
                   Cancelar
                 </button>
                 <button 
-                  onClick={() => confirmModal.prod && executeToggleActive(confirmModal.prod, confirmModal.locId, false)}
-                  className="flex-1 bg-rose-600 hover:bg-rose-700 text-white font-black py-4 rounded-2xl shadow-lg shadow-rose-200 transition-all"
+                  onClick={() => {
+                    if (confirmModal.isBatch && confirmModal.batchItems) {
+                      executeBatchDeactivation(confirmModal.batchItems);
+                    } else if (confirmModal.prod) {
+                      executeToggleActive(confirmModal.prod, confirmModal.locId, false);
+                    }
+                  }}
+                  className={`flex-1 text-white font-black py-4 rounded-2xl shadow-lg transition-all ${confirmModal.isBatch ? 'bg-orange-600 hover:bg-orange-700 shadow-orange-200' : 'bg-rose-600 hover:bg-rose-700 shadow-rose-200'}`}
                 >
                   Sí, Confirmar
                 </button>
@@ -468,7 +654,7 @@ const App: React.FC = () => {
                 </h2>
                 <div className="space-y-6">
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">1. Escanear Producto</label>
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 block">1. Escanear Producto</label>
                     <input
                       ref={productInputRef}
                       value={scanProductCode}
@@ -480,7 +666,7 @@ const App: React.FC = () => {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">2. Escanear Ubicación</label>
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 block">2. Escanear Ubicación</label>
                     <input
                       ref={locationInputRef}
                       value={scanLocationCode}
@@ -492,7 +678,7 @@ const App: React.FC = () => {
                   </div>
                   
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3 block text-center">3. Rol de Ubicación</label>
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-3 block text-center">3. Rol de Ubicación</label>
                     <div className="p-4 bg-slate-100 rounded-2xl border border-slate-200 flex items-center justify-center min-h-[56px]">
                       {scannedLocationInfo?.master ? (
                         scannedLocationInfo.master.tipo ? (
@@ -512,7 +698,7 @@ const App: React.FC = () => {
                   </div>
 
                   <div>
-                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2 block">4. Observaciones</label>
+                    <label className="text-[10px] font-black text-zinc-400 uppercase tracking-widest mb-2 block">4. Observaciones</label>
                     <textarea 
                       value={assignObs}
                       onChange={e => setAssignObs(e.target.value)}
@@ -596,15 +782,26 @@ const App: React.FC = () => {
                       <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Contenido ({scannedLocationInfo.products.length})</p>
                       {scannedLocationInfo.products.length > 0 ? (
                         scannedLocationInfo.products.map((p, i) => (
-                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-100">
+                          <div key={i} className="flex items-center justify-between p-3 bg-slate-50 rounded-2xl border border-slate-100 group">
                             <div className="flex items-center gap-3">
                               <div className="bg-white p-2 rounded-lg border border-slate-200 text-slate-400"><Box size={14} /></div>
                               <div>
-                                <p className="text-[10px] font-black text-orange-600 leading-none mb-1">{p.sku}</p>
-                                <p className="text-[11px] font-bold text-slate-800 uppercase truncate max-w-[150px]">{p.descripcion}</p>
+                                <div className="flex items-center gap-2 mb-0.5">
+                                  <p className="text-[10px] font-black text-orange-600 leading-none">{p.sku}</p>
+                                  <p className="text-[9px] font-mono text-slate-400 opacity-60">EAN: {p.ean}</p>
+                                </div>
+                                <p className="text-[11px] font-bold text-slate-800 uppercase truncate max-w-[120px]">{p.descripcion}</p>
                               </div>
                             </div>
-                            <span className="text-[8px] font-black text-slate-400 uppercase tracking-tighter">{p.cliente}</span>
+                            <div className="flex items-center gap-2">
+                              <button 
+                                onClick={() => handleToggleActive(p, scanLocationCode.toUpperCase(), false)}
+                                className="p-2 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-lg transition-all"
+                                title="Desvincular de esta ubicación"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
                           </div>
                         ))
                       ) : (
@@ -668,7 +865,17 @@ const App: React.FC = () => {
                                   <div key={i} className="flex items-center px-4 py-2 rounded-xl border bg-slate-50 border-slate-200 text-slate-700 font-bold">
                                     <MapPin size={14} className="mr-2 opacity-50" />
                                     <span className="text-sm mr-2">{u.ubicacionId}</span>
-                                    <span className="text-[9px] font-black uppercase opacity-40">{u.rolUbicacion}</span>
+                                    <span className="text-[9px] font-black uppercase opacity-40 mr-2">{u.rolUbicacion}</span>
+                                    <button 
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleToggleActive(p, u.ubicacionId, false);
+                                      }}
+                                      className="p-1 text-slate-300 hover:text-rose-500 hover:bg-rose-50 rounded-md transition-all"
+                                      title="Desvincular ubicación"
+                                    >
+                                      <Trash2 size={14} />
+                                    </button>
                                   </div>
                                 ))}
                               </div>
@@ -728,7 +935,7 @@ const App: React.FC = () => {
 
               {selectedLocData ? (
                 <div className="space-y-6">
-                  <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
                     <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex flex-col items-center">
                       <p className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Disponibilidad</p>
                       {selectedLocData.productsHere.length > 0 ? (
@@ -741,8 +948,20 @@ const App: React.FC = () => {
                       <p className="text-[10px] font-black text-slate-400 uppercase mb-2 tracking-widest">Configuración</p>
                       <span className="font-black text-lg text-slate-800 uppercase tracking-tight">Multi-SKU</span>
                     </div>
-                    <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex flex-col items-center">
+                    <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex flex-col items-center justify-center">
                        <button onClick={() => setShowLocHistory(!showLocHistory)} className="flex items-center text-orange-600 hover:text-orange-700 font-bold transition-all"><History size={18} className="mr-2" /> {showLocHistory ? 'Stock' : 'Historial'}</button>
+                    </div>
+                    <div className="bg-white p-6 rounded-[2rem] border border-slate-200 shadow-sm flex flex-col items-center justify-center">
+                       <button 
+                        disabled={selectedForEmpty.size === 0 || isAssigning}
+                        onClick={handleEmptySelectedRequest} 
+                        className="flex flex-col items-center text-rose-600 hover:text-rose-700 font-bold transition-all disabled:opacity-30"
+                       >
+                         <div className="flex items-center">
+                            <Trash2 size={18} className="mr-2" /> Vaciar Sel.
+                         </div>
+                         {selectedForEmpty.size > 0 && <span className="text-[9px] bg-rose-500 text-white px-1.5 py-0.5 rounded-full mt-1">({selectedForEmpty.size})</span>}
+                       </button>
                     </div>
                   </div>
                   {!showLocHistory ? (
@@ -752,14 +971,33 @@ const App: React.FC = () => {
                           <Package size={16} className="text-slate-400 mr-2" />
                           <h3 className="font-black text-slate-800 text-xs uppercase tracking-widest">Contenido actual</h3>
                         </div>
-                        <span className="text-[10px] font-black text-slate-400 bg-white px-3 py-1 rounded-lg border shadow-sm">{selectedLocData.productsHere.length} Items</span>
+                        <div className="flex items-center gap-4">
+                            <button 
+                              onClick={toggleSelectAllForEmpty}
+                              className="text-[10px] font-black uppercase text-orange-600 hover:underline"
+                            >
+                              {selectedForEmpty.size === selectedLocData.productsHere.length ? 'Desmarcar todo' : 'Marcar todo'}
+                            </button>
+                            <span className="text-[10px] font-black text-slate-400 bg-white px-3 py-1 rounded-lg border shadow-sm">{selectedLocData.productsHere.length} Items</span>
+                        </div>
                       </div>
                       <table className="w-full text-left">
                         <tbody className="divide-y divide-slate-100">
                           {selectedLocData.productsHere.map(p => (
-                            <tr key={p.id} className="hover:bg-slate-50 transition-colors">
-                              <td className="px-8 py-5">
-                                <p className="text-xs font-black text-orange-600">{p.sku}</p>
+                            <tr key={p.id} className="hover:bg-slate-50 transition-colors group">
+                              <td className="pl-8 py-5 w-10">
+                                <button 
+                                  onClick={() => toggleSelectForEmpty(p.sku)}
+                                  className={`p-1 rounded-md transition-all ${selectedForEmpty.has(p.sku) ? 'text-rose-500 bg-rose-50 shadow-sm' : 'text-slate-300 bg-slate-100 group-hover:text-slate-400'}`}
+                                  title={selectedForEmpty.has(p.sku) ? "Quitar de selección" : "Marcar para eliminar"}
+                                >
+                                  <Trash2 size={20} />
+                                </button>
+                              </td>
+                              <td className="px-6 py-5">
+                                <p className="text-xs font-black text-orange-600">
+                                  SKU: {p.sku} <span className="text-slate-400 font-mono ml-3">EAN: {p.ean}</span>
+                                </p>
                                 <p className="text-sm font-bold text-slate-800 uppercase leading-none mt-1">{p.descripcion}</p>
                               </td>
                               <td className="px-8 py-5 text-right">
@@ -800,21 +1038,37 @@ const App: React.FC = () => {
           )}
 
           {!loading && viewMode === 'admin' && currentUser.role === 'admin' && (
-            <div className="max-w-6xl mx-auto space-y-6">
+            <div className="max-w-7xl mx-auto space-y-6">
               <div className="flex flex-col md:flex-row md:items-end justify-between gap-4 mb-8">
                 <div>
                   <h2 className="text-3xl font-black text-slate-800">Panel Administrativo</h2>
-                  <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] mt-1">Sincronización con Base Única Zuiden</p>
+                  <p className="text-slate-400 font-bold uppercase tracking-widest text-[10px] mt-1">Gestión Centralizada Zuiden</p>
                 </div>
-                <div className="relative">
-                  <Filter className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
-                  <input 
-                    type="text"
-                    placeholder="EAN, SKU o Ubicación..."
-                    className="bg-white border border-slate-200 rounded-2xl pl-12 pr-6 py-5 w-full md:w-[450px] outline-none focus:ring-4 focus:ring-orange-500/10 transition-all font-bold text-sm shadow-sm"
-                    value={adminSearchQuery}
-                    onChange={e => setAdminSearchQuery(e.target.value)}
-                  />
+                <div className="flex flex-wrap items-center gap-3">
+                  {adminSelectedIndices.size > 0 && (
+                    <button 
+                      onClick={handleBulkDisableAdmin}
+                      className="flex items-center gap-2 bg-rose-600 hover:bg-rose-700 text-white px-5 py-5 rounded-2xl font-black text-sm shadow-lg shadow-rose-100 transition-all border border-rose-500/20 animate-in fade-in zoom-in"
+                    >
+                      <Trash2 size={18} /> Deshabilitar ({adminSelectedIndices.size})
+                    </button>
+                  )}
+                  <button 
+                    onClick={handleExportExcel}
+                    className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white px-5 py-5 rounded-2xl font-black text-sm shadow-lg shadow-emerald-100 transition-all border border-emerald-500/20"
+                  >
+                    <Download size={18} /> Exportar Excel
+                  </button>
+                  <div className="relative">
+                    <Filter className="absolute left-5 top-1/2 -translate-y-1/2 text-slate-400" size={18} />
+                    <input 
+                      type="text"
+                      placeholder="Buscar SKU, Cliente..."
+                      className="bg-white border border-slate-200 rounded-2xl pl-12 pr-6 py-5 w-full md:w-[350px] outline-none focus:ring-4 focus:ring-orange-500/10 transition-all font-bold text-sm shadow-sm"
+                      value={adminSearchQuery}
+                      onChange={e => setAdminSearchQuery(e.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
 
@@ -822,52 +1076,104 @@ const App: React.FC = () => {
                 <table className="w-full text-left">
                   <thead className="bg-slate-50 border-b border-slate-100">
                     <tr>
-                      <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Identificación</th>
-                      <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Producto / Cliente</th>
-                      <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest">Espacio / Rol</th>
-                      <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Estado</th>
-                      <th className="px-8 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Control</th>
+                      <th className="px-4 py-6 text-center w-12">
+                        <button onClick={toggleSelectAllAdmin} className="p-1 rounded-md bg-white border border-slate-200 text-slate-300 hover:text-orange-500 transition-all">
+                          {adminSelectedIndices.size === adminFilteredList.length ? <CheckSquare className="text-orange-500" size={20} /> : <Square size={20} />}
+                        </button>
+                      </th>
+                      <th 
+                        className="px-6 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer hover:bg-slate-100 group transition-all"
+                        onClick={() => requestAdminSort('sku')}
+                      >
+                        <div className="flex items-center gap-2">
+                          Identificación
+                          <ArrowUpDown size={12} className={adminSort?.key === 'sku' ? 'text-orange-500' : 'opacity-0 group-hover:opacity-100'} />
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer hover:bg-slate-100 group transition-all"
+                        onClick={() => requestAdminSort('descripcion')}
+                      >
+                        <div className="flex items-center gap-2">
+                          Producto
+                          <ArrowUpDown size={12} className={adminSort?.key === 'descripcion' ? 'text-orange-500' : 'opacity-0 group-hover:opacity-100'} />
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer hover:bg-slate-100 group transition-all"
+                        onClick={() => requestAdminSort('cliente')}
+                      >
+                        <div className="flex items-center gap-2">
+                          Cliente
+                          <ArrowUpDown size={12} className={adminSort?.key === 'cliente' ? 'text-orange-500' : 'opacity-0 group-hover:opacity-100'} />
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest cursor-pointer hover:bg-slate-100 group transition-all"
+                        onClick={() => requestAdminSort('ubicacionId')}
+                      >
+                        <div className="flex items-center gap-2">
+                          Ubicación
+                          <ArrowUpDown size={12} className={adminSort?.key === 'ubicacionId' ? 'text-orange-500' : 'opacity-0 group-hover:opacity-100'} />
+                        </div>
+                      </th>
+                      <th 
+                        className="px-6 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center cursor-pointer hover:bg-slate-100 group transition-all"
+                        onClick={() => requestAdminSort('activo')}
+                      >
+                        <div className="flex items-center justify-center gap-2">
+                          Estado
+                          <ArrowUpDown size={12} className={adminSort?.key === 'activo' ? 'text-orange-500' : 'opacity-0 group-hover:opacity-100'} />
+                        </div>
+                      </th>
+                      <th className="px-6 py-6 text-[10px] font-black text-slate-400 uppercase tracking-widest text-center">Acción</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {adminFilteredList.map((item, idx) => (
-                      <tr key={idx} className={`hover:bg-slate-50 transition-colors ${!item.location.activo ? 'bg-rose-50/20' : ''}`}>
-                        <td className="px-8 py-6">
+                      <tr key={idx} className={`hover:bg-slate-50 transition-colors group ${!item.location.activo ? 'bg-rose-50/20' : ''}`}>
+                        <td className="px-4 py-6 text-center">
+                          <button onClick={() => toggleAdminSelection(idx)} className={`p-1 rounded-md transition-all ${adminSelectedIndices.has(idx) ? 'text-orange-500' : 'text-slate-200 hover:text-slate-400'}`}>
+                            {adminSelectedIndices.has(idx) ? <CheckSquare size={20} /> : <Square size={20} />}
+                          </button>
+                        </td>
+                        <td className="px-6 py-6">
                           <p className="text-xs font-black text-orange-600">{item.product.sku}</p>
-                          <p className="text-[9px] font-mono text-slate-400 mt-1 opacity-60 tracking-wider">{item.product.ean}</p>
+                          <p className="text-[9px] font-mono text-slate-400 mt-0.5 opacity-60">{item.product.ean}</p>
                         </td>
-                        <td className="px-8 py-6">
-                          <p className="text-sm font-bold text-slate-800 uppercase truncate max-w-[200px] leading-tight">{item.product.descripcion}</p>
-                          <p className="text-[9px] font-black text-slate-400 uppercase mt-1 opacity-60">{item.product.cliente}</p>
+                        <td className="px-6 py-6">
+                          <p className="text-sm font-bold text-slate-800 uppercase truncate max-w-[180px] leading-tight">{item.product.descripcion}</p>
                         </td>
-                        <td className="px-8 py-6">
+                        <td className="px-6 py-6">
+                          <span className="text-[10px] font-black text-slate-500 uppercase tracking-widest bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">{item.product.cliente}</span>
+                        </td>
+                        <td className="px-6 py-6">
                           <div className="flex items-center gap-2">
-                            <span className={`px-3 py-2 rounded-xl font-black text-xs border ${item.location.activo ? 'bg-black text-white border-transparent shadow-sm' : 'bg-rose-100 text-rose-800 border-rose-200'}`}>
+                            <span className={`px-3 py-2 rounded-xl font-black text-xs border ${item.location.activo ? 'bg-black text-white border-transparent' : 'bg-rose-100 text-rose-800 border-rose-200'}`}>
                               {item.location.ubicacionId}
                             </span>
-                            <span className="text-[9px] font-black text-slate-400 uppercase">{item.location.rolUbicacion}</span>
                           </div>
                         </td>
-                        <td className="px-8 py-6 text-center">
+                        <td className="px-6 py-6 text-center">
                           <span className={`px-4 py-1.5 rounded-full text-[9px] font-black uppercase border transition-all ${
                             item.location.activo 
-                              ? 'bg-emerald-50 border-emerald-200 text-emerald-600 shadow-sm' 
-                              : 'bg-rose-100 border-rose-200 text-rose-600 shadow-sm'
+                              ? 'bg-emerald-50 border-emerald-200 text-emerald-600' 
+                              : 'bg-rose-100 border-rose-200 text-rose-600'
                           }`}>
                             {item.location.activo ? 'Activa' : 'Baja'}
                           </span>
                         </td>
-                        <td className="px-8 py-6 text-center">
+                        <td className="px-6 py-6 text-center">
                           <button
                             disabled={isAssigning}
                             onClick={() => handleToggleActive(item.product, item.location.ubicacionId, !item.location.activo)}
-                            className={`px-5 py-2.5 rounded-xl font-black text-[10px] border transition-all shadow-sm ${
+                            className={`px-5 py-2.5 rounded-xl font-black text-[10px] border transition-all ${
                               item.location.activo 
                                 ? 'bg-white text-rose-600 border-rose-100 hover:bg-rose-600 hover:text-white hover:border-transparent' 
                                 : 'bg-white text-emerald-600 border-emerald-100 hover:bg-emerald-600 hover:text-white hover:border-transparent'
                             }`}
                           >
-                            {item.location.activo ? 'DESHABILITAR' : 'HABILITAR'}
+                            {item.location.activo ? 'BAJA' : 'ALTA'}
                           </button>
                         </td>
                       </tr>
@@ -881,10 +1187,10 @@ const App: React.FC = () => {
       </div>
       <footer className="bg-white border-t border-slate-200 h-10 flex items-center justify-between px-8 shrink-0">
         <p className="text-[9px] font-bold text-slate-400 uppercase tracking-[0.2em]">
-          Zuiden Fulfillment Systems • Mapper Pro v1.6
+          Zuiden Fulfillment Systems • Mapper Pro v2.3
         </p>
         <div className="flex items-center gap-4">
-          <p className="text-[9px] font-bold text-slate-400 uppercase">{currentUser.label}</p>
+          <p className="text-[9px] font-bold text-slate-400 uppercase">{currentUser ? currentUser.label : ''}</p>
           <p className="text-[9px] font-bold text-slate-300 uppercase">© 2024 Logística Inteligente</p>
         </div>
       </footer>
